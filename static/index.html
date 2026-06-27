@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KRS Lead Scraper</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <div class="max-w-4xl mx-auto px-6 py-10">
+
+    <!-- Header -->
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold text-gray-900">KRS Lead Scraper</h1>
+      <p class="text-gray-500 mt-1">Newly registered Polish companies</p>
+    </div>
+
+    <!-- Form -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Start date</label>
+          <input id="startDate" type="date"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">End date</label>
+          <input id="endDate" type="date"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Legal form</label>
+          <select id="legalForm"
+            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+            <option value="spzoo">Sp. z o.o. only</option>
+            <option value="all">All legal forms</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="scrapeBtn" onclick="startScrape()"
+        class="mt-5 w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-3 px-6 rounded-lg transition-colors text-sm">
+        Scrape Leads
+      </button>
+    </div>
+
+    <!-- Progress section -->
+    <div id="progressSection" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <p id="statusMsg" class="text-sm text-gray-600">Starting…</p>
+        <p id="statsText" class="text-sm text-gray-500">0 leads found</p>
+      </div>
+      <div class="w-full bg-gray-100 rounded-full h-2.5">
+        <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+      </div>
+      <p id="progressPct" class="text-xs text-gray-400 mt-1 text-right">0%</p>
+    </div>
+
+    <!-- Error section -->
+    <div id="errorSection" class="hidden bg-red-50 border border-red-200 rounded-xl p-5 mb-6">
+      <p class="text-sm font-medium text-red-700">Something went wrong</p>
+      <p id="errorMsg" class="text-sm text-red-600 mt-1"></p>
+    </div>
+
+    <!-- Results section -->
+    <div id="resultsSection" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="flex items-center justify-between mb-5">
+        <p id="summaryText" class="text-sm font-semibold text-gray-800"></p>
+        <button id="downloadBtn" onclick="downloadCSV()"
+          class="bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+          Download CSV
+        </button>
+      </div>
+
+      <div id="noLeadsMsg" class="hidden text-sm text-gray-500 text-center py-8">
+        No leads found for the selected date range and filter.
+      </div>
+
+      <div id="tableWrapper" class="overflow-x-auto">
+        <table class="min-w-full text-xs text-left">
+          <thead>
+            <tr class="border-b border-gray-200">
+              <th class="py-2 pr-4 font-semibold text-gray-600">Nazwa</th>
+              <th class="py-2 pr-4 font-semibold text-gray-600">NIP</th>
+              <th class="py-2 pr-4 font-semibold text-gray-600">Email</th>
+              <th class="py-2 pr-4 font-semibold text-gray-600">Miejscowosc</th>
+              <th class="py-2 pr-4 font-semibold text-gray-600">PKD</th>
+              <th class="py-2 font-semibold text-gray-600">Data rej.</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody" class="divide-y divide-gray-100"></tbody>
+        </table>
+        <p id="truncatedNote" class="hidden text-xs text-gray-400 mt-3 text-center"></p>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let currentJobId = null;
+    let pollInterval = null;
+
+    // Default dates to today
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('startDate').value = today;
+    document.getElementById('endDate').value = today;
+
+    function show(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+    async function startScrape() {
+      const startDate = document.getElementById('startDate').value;
+      const endDate   = document.getElementById('endDate').value;
+      const allForms  = document.getElementById('legalForm').value === 'all';
+
+      if (!startDate || !endDate) {
+        alert('Please select both start and end dates.');
+        return;
+      }
+
+      // Reset UI
+      hide('resultsSection');
+      hide('errorSection');
+      show('progressSection');
+      setProgress(0, 'Starting…', '0 leads found');
+
+      const btn = document.getElementById('scrapeBtn');
+      btn.disabled = true;
+      btn.textContent = 'Scraping…';
+
+      try {
+        const res = await fetch('/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start_date: startDate, end_date: endDate, all_forms: allForms }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          showError(err.detail || 'Failed to start scrape job.');
+          return;
+        }
+
+        const { job_id } = await res.json();
+        currentJobId = job_id;
+        pollInterval = setInterval(pollStatus, 2000);
+
+      } catch (e) {
+        showError('Could not reach the server. Make sure the backend is running.');
+      }
+    }
+
+    async function pollStatus() {
+      if (!currentJobId) return;
+      try {
+        const res = await fetch(`/status/${currentJobId}`);
+        if (!res.ok) { showError('Lost track of the scrape job.'); return; }
+
+        const data = await res.json();
+        setProgress(data.progress_pct, data.message, `${data.leads_found} leads found`);
+
+        if (data.status === 'done') {
+          clearInterval(pollInterval);
+          await loadResults();
+          resetBtn();
+        } else if (data.status === 'error') {
+          clearInterval(pollInterval);
+          showError(data.message);
+          resetBtn();
+        }
+      } catch (e) {
+        clearInterval(pollInterval);
+        showError('Lost connection to the server.');
+        resetBtn();
+      }
+    }
+
+    async function loadResults() {
+      const res = await fetch(`/preview/${currentJobId}`);
+      const data = await res.json();
+
+      hide('progressSection');
+      show('resultsSection');
+
+      if (data.total === 0) {
+        show('noLeadsMsg');
+        hide('tableWrapper');
+        document.getElementById('downloadBtn').disabled = true;
+        document.getElementById('downloadBtn').classList.add('opacity-50', 'cursor-not-allowed');
+        document.getElementById('summaryText').textContent = 'No leads found.';
+        return;
+      }
+
+      document.getElementById('summaryText').textContent =
+        `Found ${data.total} lead${data.total !== 1 ? 's' : ''}`;
+
+      const tbody = document.getElementById('resultsBody');
+      tbody.innerHTML = '';
+      for (const lead of data.leads) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="py-2 pr-4 text-gray-800 font-medium max-w-[180px] truncate">${esc(lead.nazwa)}</td>
+          <td class="py-2 pr-4 text-gray-600">${esc(lead.nip)}</td>
+          <td class="py-2 pr-4 text-blue-600">${lead.email ? `<a href="mailto:${esc(lead.email)}">${esc(lead.email)}</a>` : '—'}</td>
+          <td class="py-2 pr-4 text-gray-600">${esc(lead.miejscowosc)}</td>
+          <td class="py-2 pr-4 text-gray-600 max-w-[160px] truncate" title="${esc(lead.pkd_opis)}">${esc(lead.pkd_opis) || '—'}</td>
+          <td class="py-2 text-gray-500">${esc(lead.data_rejestracji)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      if (data.total > 20) {
+        const note = document.getElementById('truncatedNote');
+        note.textContent = `Showing first 20 of ${data.total} results. Download CSV for all.`;
+        show('truncatedNote');
+      }
+    }
+
+    function downloadCSV() {
+      if (!currentJobId) return;
+      window.location.href = `/download/${currentJobId}`;
+    }
+
+    function setProgress(pct, msg, stats) {
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('progressPct').textContent = pct + '%';
+      document.getElementById('statusMsg').textContent = msg;
+      document.getElementById('statsText').textContent = stats;
+    }
+
+    function showError(msg) {
+      hide('progressSection');
+      show('errorSection');
+      document.getElementById('errorMsg').textContent = msg;
+      resetBtn();
+    }
+
+    function resetBtn() {
+      const btn = document.getElementById('scrapeBtn');
+      btn.disabled = false;
+      btn.textContent = 'Scrape Leads';
+    }
+
+    function esc(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>
