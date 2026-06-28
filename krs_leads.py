@@ -125,9 +125,14 @@ def parse_lead(data: dict, target_date: str, legal_form_filter: str | None) -> d
         first = prev[0]
         if isinstance(first, dict):
             vals = list(first.values())
-            # vals[0] = sequence number, vals[1] = pkd code, vals[2] = description
-            pkd_code = vals[1] if len(vals) > 1 else ""
-            pkd_desc = vals[2] if len(vals) > 2 else ""
+            # API returns 4 values: (sequence, code_prefix, code_suffix, description)
+            # e.g. (1, "47", "91", "Sprzedaż detaliczna...")  → PKD code is "47.91"
+            if len(vals) >= 4:
+                pkd_code = f"{vals[1]}.{vals[2]}"
+                pkd_desc = vals[3]
+            elif len(vals) >= 3:
+                pkd_code = vals[1]
+                pkd_desc = vals[2]
 
     return {
         "nazwa":            dane_podmiotu.get("nazwa", ""),
@@ -151,7 +156,7 @@ def parse_lead(data: dict, target_date: str, legal_form_filter: str | None) -> d
 def scrape_date(day: str, legal_form_filter: str | None = LEGAL_FORM_FILTER) -> list:
     """Scrape all matching new registrations for a single date."""
     print(f"\n📅  {day} — fetching KRS bulletin...")
-    krs_numbers = get_bulletin(day)
+    krs_numbers = list(dict.fromkeys(get_bulletin(day)))
 
     if not krs_numbers:
         print(f"    No KRS changes found.")
