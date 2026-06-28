@@ -66,7 +66,7 @@ def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None,
                 data = future.result()
                 if data:
                     lead = parse_lead(data, day, legal_form_filter)
-                    if lead and lead["krs"] not in seen_result_krs:
+                    if lead and lead["email"].strip() and lead["krs"] not in seen_result_krs:
                         if not any(lead["pkd"].startswith(p) for p in excluded_pkd):
                             seen_result_krs.add(lead["krs"])
                             all_leads.append(lead)
