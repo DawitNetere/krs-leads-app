@@ -41,6 +41,9 @@ REQUEST_TIMEOUT = 20      # seconds per request
 # Filter — change to None to keep all legal forms
 LEGAL_FORM_FILTER = "SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
 
+# PKD codes to exclude — accounting/bookkeeping competitors
+ACCOUNTING_PKD_PREFIXES = {"69.20"}
+
 CSV_FIELDS = [
     "nazwa", "nip", "email", "telefon", "www",
     "pkd", "pkd_opis", "data_rejestracji",
@@ -124,18 +127,12 @@ def parse_lead(data: dict, target_date: str, legal_form_filter: str | None) -> d
     if isinstance(prev, list) and prev:
         first = prev[0]
         if isinstance(first, dict):
-            vals = list(first.values())
-            # API returns 5 values: (sequence, major, minor, subclass, description)
-            # e.g. (1, "01", "61", "Z", "Działalność usługowa...")  → PKD "01.61.Z"
-            if len(vals) >= 5:
-                pkd_code = f"{vals[1]}.{vals[2]}.{vals[3]}"
-                pkd_desc = vals[4]
-            elif len(vals) >= 4:
-                pkd_code = f"{vals[1]}.{vals[2]}"
-                pkd_desc = vals[3]
-            elif len(vals) >= 3:
-                pkd_code = vals[1]
-                pkd_desc = vals[2]
+            pkd_code = ".".join(filter(None, [
+                first.get("kodDzial", ""),
+                first.get("kodKlasa", ""),
+                first.get("kodPodklasa", ""),
+            ]))
+            pkd_desc = first.get("opis", "")
 
     return {
         "nazwa":            dane_podmiotu.get("nazwa", ""),

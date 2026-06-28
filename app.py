@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from krs_leads import get_bulletin, fetch_company, parse_lead, LEGAL_FORM_FILTER, CSV_FIELDS
+from krs_leads import get_bulletin, fetch_company, parse_lead, LEGAL_FORM_FILTER, CSV_FIELDS, ACCOUNTING_PKD_PREFIXES
 
 app = FastAPI()
 
@@ -22,9 +22,10 @@ class ScrapeRequest(BaseModel):
     start_date: str
     end_date: str
     all_forms: bool = False
+    exclude_accounting: bool = True
 
 
-def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None):
+def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None, excluded_pkd: set):
     all_leads = []
     seen_krs = set()
 
@@ -51,8 +52,9 @@ def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None)
                     if data:
                         lead = parse_lead(data, day, legal_form_filter)
                         if lead and lead["krs"] not in seen_krs:
-                            seen_krs.add(lead["krs"])
-                            all_leads.append(lead)
+                            if not any(lead["pkd"].startswith(p) for p in excluded_pkd):
+                                seen_krs.add(lead["krs"])
+                                all_leads.append(lead)
 
                     day_pct = processed / total
                     overall_pct = (i + day_pct) / len(dates)
@@ -93,6 +95,7 @@ def start_scrape(req: ScrapeRequest):
         cur += timedelta(days=1)
 
     legal_form_filter = None if req.all_forms else LEGAL_FORM_FILTER
+    excluded_pkd = ACCOUNTING_PKD_PREFIXES if req.exclude_accounting else set()
     job_id = uuid.uuid4().hex
 
     with jobs_lock:
@@ -106,7 +109,7 @@ def start_scrape(req: ScrapeRequest):
         }
 
     thread = threading.Thread(
-        target=run_scrape_job, args=(job_id, dates, legal_form_filter), daemon=True
+        target=run_scrape_job, args=(job_id, dates, legal_form_filter, excluded_pkd), daemon=True
     )
     thread.start()
 
