@@ -125,9 +125,12 @@ def parse_lead(data: dict, target_date: str, legal_form_filter: str | None) -> d
         first = prev[0]
         if isinstance(first, dict):
             vals = list(first.values())
-            # API returns 4 values: (sequence, code_prefix, code_suffix, description)
-            # e.g. (1, "47", "91", "Sprzedaż detaliczna...")  → PKD code is "47.91"
-            if len(vals) >= 4:
+            # API returns 5 values: (sequence, major, minor, subclass, description)
+            # e.g. (1, "01", "61", "Z", "Działalność usługowa...")  → PKD "01.61.Z"
+            if len(vals) >= 5:
+                pkd_code = f"{vals[1]}.{vals[2]}.{vals[3]}"
+                pkd_desc = vals[4]
+            elif len(vals) >= 4:
                 pkd_code = f"{vals[1]}.{vals[2]}"
                 pkd_desc = vals[3]
             elif len(vals) >= 3:

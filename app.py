@@ -26,6 +26,7 @@ class ScrapeRequest(BaseModel):
 
 def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None):
     all_leads = []
+    seen_krs = set()
 
     try:
         for i, day in enumerate(dates):
@@ -49,7 +50,8 @@ def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None)
                     data = future.result()
                     if data:
                         lead = parse_lead(data, day, legal_form_filter)
-                        if lead:
+                        if lead and lead["krs"] not in seen_krs:
+                            seen_krs.add(lead["krs"])
                             all_leads.append(lead)
 
                     day_pct = processed / total
