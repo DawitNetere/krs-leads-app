@@ -26,43 +26,55 @@ class ScrapeRequest(BaseModel):
 
 
 def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None, excluded_pkd: set):
-    all_leads = []
-    seen_krs = set()
-
     try:
-        for i, day in enumerate(dates):
-            with jobs_lock:
-                jobs[job_id]["message"] = f"Fetching bulletin for {day}…"
+        # ── Step 1: fetch all bulletins in parallel ───────────────────────────
+        with jobs_lock:
+            jobs[job_id]["message"] = f"Fetching bulletins for {len(dates)} day(s)…"
 
-            krs_numbers = get_bulletin(day)
+        day_krs: dict[str, list] = {}
+        with ThreadPoolExecutor(max_workers=len(dates)) as pool:
+            bulletin_futures = {pool.submit(get_bulletin, day): day for day in dates}
+            for future in as_completed(bulletin_futures):
+                day = bulletin_futures[future]
+                day_krs[day] = list(dict.fromkeys(future.result()))
 
-            if not krs_numbers:
+        # ── Step 2: deduplicate KRS across all days before fetching ──────────
+        # Each (krs, day) pair: keep first day a KRS is seen so parse_lead
+        # can match registration date correctly.
+        seen_krs: set = set()
+        tasks: list[tuple[str, str]] = []
+        for day in dates:
+            for krs in day_krs.get(day, []):
+                if krs not in seen_krs:
+                    seen_krs.add(krs)
+                    tasks.append((krs, day))
+
+        total = len(tasks)
+        with jobs_lock:
+            jobs[job_id]["message"] = f"Processing {total} unique records across {len(dates)} day(s)…"
+
+        # ── Step 3: fetch all companies in one large pool ────────────────────
+        all_leads = []
+        seen_result_krs: set = set()
+        processed = 0
+
+        with ThreadPoolExecutor(max_workers=100) as pool:
+            futures = {pool.submit(fetch_company, krs): (krs, day) for krs, day in tasks}
+            for future in as_completed(futures):
+                krs, day = futures[future]
+                processed += 1
+                data = future.result()
+                if data:
+                    lead = parse_lead(data, day, legal_form_filter)
+                    if lead and lead["krs"] not in seen_result_krs:
+                        if not any(lead["pkd"].startswith(p) for p in excluded_pkd):
+                            seen_result_krs.add(lead["krs"])
+                            all_leads.append(lead)
+
                 with jobs_lock:
-                    jobs[job_id]["message"] = f"No KRS changes found for {day}."
-                continue
-
-            total = len(krs_numbers)
-            processed = 0
-
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                futures = {pool.submit(fetch_company, k): k for k in krs_numbers}
-                for future in as_completed(futures):
-                    processed += 1
-                    data = future.result()
-                    if data:
-                        lead = parse_lead(data, day, legal_form_filter)
-                        if lead and lead["krs"] not in seen_krs:
-                            if not any(lead["pkd"].startswith(p) for p in excluded_pkd):
-                                seen_krs.add(lead["krs"])
-                                all_leads.append(lead)
-
-                    day_pct = processed / total
-                    overall_pct = (i + day_pct) / len(dates)
-                    with jobs_lock:
-                        jobs[job_id]["progress_pct"] = round(overall_pct * 100)
-                        jobs[job_id]["leads_found"] = len(all_leads)
-                        jobs[job_id]["records_checked"] = i * total + processed
-                        jobs[job_id]["message"] = f"Checking {day} ({processed}/{total})…"
+                    jobs[job_id]["progress_pct"] = round(processed / total * 100)
+                    jobs[job_id]["leads_found"] = len(all_leads)
+                    jobs[job_id]["message"] = f"Checked {processed}/{total} records — {len(all_leads)} leads found…"
 
         with jobs_lock:
             jobs[job_id]["status"] = "done"
