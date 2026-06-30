@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from krs_leads import get_bulletin, fetch_company, parse_lead, LEGAL_FORM_FILTER, CSV_FIELDS, ACCOUNTING_PKD_PREFIXES
+from regon import enrich_leads
 
 app = FastAPI()
 
@@ -66,15 +67,29 @@ def run_scrape_job(job_id: str, dates: list[str], legal_form_filter: str | None,
                 data = future.result()
                 if data:
                     lead = parse_lead(data, day, legal_form_filter)
-                    if lead and lead["email"].strip() and lead["krs"] not in seen_result_krs:
+                    if lead and lead["krs"] not in seen_result_krs:
                         if not any(lead["pkd"].startswith(p) for p in excluded_pkd):
                             seen_result_krs.add(lead["krs"])
                             all_leads.append(lead)
 
                 with jobs_lock:
-                    jobs[job_id]["progress_pct"] = round(processed / total * 100)
+                    jobs[job_id]["progress_pct"] = round(processed / total * 90 / 100)
                     jobs[job_id]["leads_found"] = len(all_leads)
-                    jobs[job_id]["message"] = f"Checked {processed}/{total} records — {len(all_leads)} leads found…"
+                    jobs[job_id]["message"] = f"Checked {processed}/{total} records — {len(all_leads)} candidates…"
+
+        # ── Step 4: enrich with REGON (phone + email) ────────────────────────
+        with jobs_lock:
+            jobs[job_id]["message"] = f"Enriching {len(all_leads)} leads via REGON API…"
+
+        def regon_progress(done, total_r):
+            with jobs_lock:
+                jobs[job_id]["progress_pct"] = 90 + round(done / total_r * 10)
+                jobs[job_id]["message"] = f"REGON enrichment: {done}/{total_r}…"
+
+        all_leads = enrich_leads(all_leads, progress_cb=regon_progress)
+
+        # Keep only leads that have an email (from KRS or REGON)
+        all_leads = [l for l in all_leads if l.get("email", "").strip()]
 
         with jobs_lock:
             jobs[job_id]["status"] = "done"
